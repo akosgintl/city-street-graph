@@ -31,12 +31,12 @@ WAYS = [(100, [1, 2, 3], {"highway": "residential", "name": "A utca"}),
 RELS = [(300, 200, "9", "Test district"), (301, 201, "10", "Nyugat"), (302, 202, "10", "Kelet-Dél")]
 
 
-def write_osm(path: Path) -> None:
+def write_osm(path: Path, nodes: dict = NODES, ways: list = WAYS) -> None:
     tag = lambda t: "".join(f'<tag k="{k}" v="{v}"/>' for k, v in t.items())  # noqa: E731
     xml = ['<?xml version="1.0" encoding="UTF-8"?>', '<osm version="0.6" generator="test">']
-    xml += [f'<node id="{i}" version="1" lat="{la}" lon="{lo}"/>' for i, (lo, la) in sorted(NODES.items())]
+    xml += [f'<node id="{i}" version="1" lat="{la}" lon="{lo}"/>' for i, (lo, la) in sorted(nodes.items())]
     xml += [f'<way id="{w}" version="1">' + "".join(f'<nd ref="{n}"/>' for n in refs) + tag(t) + "</way>"
-            for w, refs, t in WAYS]
+            for w, refs, t in ways]
     xml += [f'<relation id="{r}" version="1"><member type="way" ref="{w}" role="outer"/>'
             + tag({"type": "boundary", "boundary": "administrative", "admin_level": lvl, "name": name}) + "</relation>"
             for r, w, lvl, name in RELS] + ["</osm>"]
@@ -114,6 +114,30 @@ def test_area_auto_zones_and_clip(built, tmp_path):
         graph_build.build({**cfg, "zones": [{**cfg["zones"][0], "expect_count": 3}]}, tmp, tmp_path / "x", tmp / "test.osm")
 
 
+def test_river_bridges(tmp_path):
+    """A river between grid columns 0 and 1: way 101 is a bridge in the graph; a railway bridge and a car-free
+    road bridge are reported (and drawn) as river bridges outside the graph."""
+    nodes = {**NODES, 70: (19.0002, 47.5005), 71: (19.0008, 47.5005), 72: (19.0002, 47.5015), 73: (19.0008, 47.5015),
+             80: (19.0003, 47.4996), 81: (19.0007, 47.4996), 82: (19.0007, 47.5029), 83: (19.0003, 47.5029),
+             84: (19.0005, 47.4996), 85: (19.0005, 47.5029)}
+    ways = [(w, r, {**t, "name": "Régi híd", "bridge": "yes"} if w == 101 else t) for w, r, t in WAYS[:-3]] + [
+        (150, [70, 71], {"railway": "rail", "bridge": "yes", "bridge:name": "Vasúti híd"}),
+        (151, [72, 73], {"highway": "tertiary", "motor_vehicle": "no", "bridge": "yes", "name": "Lánc híd"}),
+        (152, [70, 73], {"highway": "footway", "bridge": "yes", "name": "Gyalog híd"}),      # footways are not listed
+        (160, [80, 81, 82, 83, 80], {"natural": "water", "water": "river"}),
+        (161, [84, 85], {"waterway": "river", "name": "Folyó"})] + WAYS[-3:]
+    write_osm(tmp_path / "river.osm", nodes, ways)
+    cfg = {**CFG, "river": {"name": "Folyó"}, "checks": {"bridges": ["Régi híd"]}}
+    stats = graph_build.build(cfg, tmp_path, tmp_path / "out", tmp_path / "river.osm")
+    assert all(stats["checks"].values()) and stats["bridges"]["Régi híd"]["ok"]
+    assert stats["river"]["crossing_bridges"] == {"Régi híd": 1}
+    assert stats["river"]["bridges_not_in_graph"] == {"Lánc híd": "road", "Vasúti híd": "rail"}
+    feats = json.loads((tmp_path / "out/zones.geojson").read_text(encoding="utf-8"))["features"]
+    assert sorted(f["properties"]["name"] for f in feats if f["properties"].get("kind") == "bridge_not_in_graph") == [
+        "Lánc híd", "Vasúti híd"]
+    assert [p.name for p in render.render(tmp_path / "out", "Test")] == ["graph.png", "zones.png", "zoom.png", "bridges.png"]
+
+
 OUT = ROOT / "out" / "budapest"
 
 
@@ -125,5 +149,9 @@ def test_budapest_output():
     rels = read(OUT / "neo4j/streets.csv")
     assert all(r["start_id"] in nodes and r["end_id"] in nodes and float(r["length_m"]) > 0 for r in rels)
     assert not stats["warnings"]
-    assert set(stats["bridges"]) == {"Árpád híd", "Margit híd", "Széchenyi lánchíd", "Erzsébet híd", "Szabadság híd",
-                                     "Petőfi híd", "Rákóczi híd"}
+    assert set(stats["bridges"]) == {"Megyeri híd", "Árpád híd", "Margit híd", "Széchenyi lánchíd", "Erzsébet híd",
+                                     "Szabadság híd", "Petőfi híd", "Rákóczi híd", "Deák Ferenc híd"}
+    assert set(stats["river"]["crossing_bridges"]) == set(stats["bridges"]) | {"K-híd", "Hajógyári híd"}  # island bridges
+    assert stats["river"]["bridges_not_in_graph"] == {"Összekötő vasúti híd": "rail", "Újpesti vasúti híd": "rail"}
+    assert stats["totals"]["restricted_segments"] > 0                       # the car-free Lánchíd (include_names)
+    assert stats["totals"]["nodes"] >= stats["osmnx"]["nodes"]              # osmnx.graphml is built without it

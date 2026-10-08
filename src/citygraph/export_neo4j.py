@@ -82,7 +82,7 @@ def ll(geom, to_ll):
     return mapping(shapely.make_valid(shapely.set_precision(to_ll(geom), 1e-7)))
 
 
-def write_zones(path: Path, zones, river, centerline, to_ll, area_ll=None) -> None:
+def write_zones(path: Path, zones, river, centerline, to_ll, area_ll=None, other_bridges=()) -> None:
     feats = [{"type": "Feature", "properties": {"zone": z["zone"], "zone_order": z["zone_order"], "source": z["source"],
                                                 **({"zone_name": z["name"]} if "name" in z else {})},
               "geometry": ll(z["geom"], to_ll)} for z in zones]
@@ -93,12 +93,16 @@ def write_zones(path: Path, zones, river, centerline, to_ll, area_ll=None) -> No
         feats.append({"type": "Feature", "properties": {"kind": "river"}, "geometry": ll(river.intersection(frame), to_ll)})
         feats.append({"type": "Feature", "properties": {"kind": "river_centerline"},
                       "geometry": ll(centerline.intersection(frame), to_ll)})
+    for b in other_bridges:  # river bridges that are not part of the graph (railways, filtered-out roads)
+        feats.append({"type": "Feature", "properties": {"kind": "bridge_not_in_graph", "name": b["name"],
+                                                        "bridge": b["kind"]}, "geometry": ll(b["geom"], to_ll)})
     write_text(path, json.dumps({"type": "FeatureCollection", "features": feats}, ensure_ascii=False))
 
 
-def write_all(out: Path, cfg, nodes, rels, zones, river, centerline, to_ll, stats, area_ll=None) -> None:
+def write_all(out: Path, cfg, nodes, rels, zones, river, centerline, to_ll, stats, area_ll=None,
+              other_bridges=()) -> None:
     out.mkdir(parents=True, exist_ok=True)
     write_neo4j(out / "neo4j", cfg, nodes, rels)
     write_graphml(out / "graph.graphml", cfg, nodes, rels, stats)
-    write_zones(out / "zones.geojson", zones, river, centerline, to_ll, area_ll)
+    write_zones(out / "zones.geojson", zones, river, centerline, to_ll, area_ll, other_bridges)
     write_text(out / "stats.json", json.dumps(stats, ensure_ascii=False, indent=2) + "\n")

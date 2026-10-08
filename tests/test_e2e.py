@@ -1,7 +1,7 @@
-"""End-to-end run for Budapest with nothing mocked: download the PBF, build through the CLI, import into Neo4j
+"""End-to-end run for central Budapest (configs/budapest-rings.yaml) with nothing mocked: download the PBF, build through the CLI, import into Neo4j
 in Docker and query it. Opt-in (`make e2e` = `pytest -m e2e`): needs internet and a running Docker daemon.
 
-It writes the real data/raw/budapest.osm.pbf and out/budapest/. Neo4j runs as its own compose project
+It writes the real data/raw/budapest.osm.pbf and out/budapest-rings/. Neo4j runs as its own compose project
 (citygraph-e2e, ports 17474/17687), so a `make neo4j-up` database is left alone; E2E_KEEP=1 keeps it running."""
 import base64
 import csv
@@ -24,7 +24,7 @@ from citygraph import fetch
 pytestmark = pytest.mark.e2e
 
 ROOT = Path(__file__).resolve().parents[1]
-CITY = "budapest"
+CITY = "budapest-rings"
 OUT = ROOT / "out" / CITY
 CFG = yaml.safe_load((ROOT / "configs" / f"{CITY}.yaml").read_text(encoding="utf-8"))
 PBF = ROOT / CFG["pbf"]
@@ -35,6 +35,7 @@ ENV = {**os.environ, "CITY": CITY, "NEO4J_PASSWORD": PASSWORD,
        "NEO4J_HTTP_PORT": str(HTTP_PORT), "NEO4J_BOLT_PORT": str(BOLT_PORT)}
 DETERMINISTIC = ("neo4j/streets.csv", "neo4j/intersections.csv", "neo4j/import.cypher", "neo4j/sample_queries.cypher",
                  "zones.geojson", "stats.json", "graph.graphml")
+PREVIEWS = ("bridges.png", "graph.png", "zones.png", "zoom.png")           # bridges.png: configs with a `river:`
 
 
 def run(cmd, **kw) -> subprocess.CompletedProcess:
@@ -81,7 +82,7 @@ def built() -> dict:
 
 @pytest.fixture(scope="module")
 def neo4j(built):
-    """Fresh Neo4j container with out/budapest/neo4j mounted, import.cypher loaded."""
+    """Fresh Neo4j container with out/budapest-rings/neo4j mounted, import.cypher loaded."""
     if not shutil.which("docker") or subprocess.run(["docker", "info"], capture_output=True).returncode:
         pytest.fail("Docker is not running (the e2e test needs it)")
     run([*COMPOSE, "down", "-v", "--remove-orphans"])
@@ -118,9 +119,9 @@ def test_fetch_provenance(built):
 def test_build_outputs(built):
     stats, nodes, rels = built["stats"], built["nodes"], built["rels"]
     assert all(stats["checks"].values()) and all(stats["sanity"].values()) and not stats["warnings"]
-    for f in (*DETERMINISTIC, "preview/graph.png", "preview/zones.png", "preview/zoom.png"):
+    for f in (*DETERMINISTIC, *(f"preview/{p}" for p in PREVIEWS)):
         assert (OUT / f).stat().st_size > 0, f
-    assert all((OUT / "preview" / f).read_bytes()[:8] == b"\x89PNG\r\n\x1a\n" for f in ("graph.png", "zones.png", "zoom.png"))
+    assert all((OUT / "preview" / f).read_bytes()[:8] == b"\x89PNG\r\n\x1a\n" for f in PREVIEWS)
     assert (len(nodes), len(rels)) == (stats["totals"]["nodes"], stats["totals"]["segments"])
     assert 3000 < len(nodes) < 5000 and 500 < stats["totals"]["km"] < 700           # central Budapest, drive network
     assert abs(sum(float(r["length_m"]) for r in rels) / 1000 - stats["totals"]["km"]) < 0.1
@@ -168,7 +169,7 @@ def test_render_command(built):
     for f in OUT.glob("preview/*.png"):
         f.unlink()
     citygraph("render", "--city", CITY)
-    assert sorted(f.name for f in OUT.glob("preview/*.png")) == ["graph.png", "zones.png", "zoom.png"]
+    assert sorted(f.name for f in OUT.glob("preview/*.png")) == list(PREVIEWS)
 
 
 # ---------------------------------------------------------------- Neo4j

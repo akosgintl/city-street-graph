@@ -9,8 +9,8 @@ Berlin, Barcelona and other cities only need a config; the PBF is downloaded (se
 make setup        # uv sync --locked: .venv with the exact versions from uv.lock + the editable package
 make test         # uv run pytest -q: synthetic OSM fixture (+ checks on out/budapest once it is built)
 ```
-`make e2e` (= `uv run pytest -m e2e -v`, ~2 min, needs internet + a running Docker) is the real run for Budapest: it downloads
-the PBF, builds through the CLI (twice, to compare the bytes), imports `out/budapest/neo4j` into a throwaway Neo4j container
+`make e2e` (= `uv run pytest -m e2e -v`, ~2 min, needs internet + a running Docker) is the real run for central Budapest
+(`budapest-rings`): it downloads the PBF, builds through the CLI (twice, to compare the bytes), imports `out/budapest-rings/neo4j` into a throwaway Neo4j container
 (compose project `citygraph-e2e`, ports 17474/17687, removed afterwards; `E2E_KEEP=1` keeps it, password `citygraph-e2e`)
 and checks counts, schema, properties, bridges, rings and the sample queries against the CSVs and `stats.json`.
 Without make (same commands on Windows PowerShell):
@@ -39,8 +39,9 @@ make render CITY=budapest      # previews only
 ```
 Output goes to `out/<city>/`:
 `neo4j/{intersections.csv, streets.csv, import.cypher, sample_queries.cypher}`,
-`graph.graphml`, `zones.geojson` (effective zone polygons + river / study-area boundary), `stats.json` (counts per zone, km, bridges,
-rings, connectivity, dropped fragments, input sha256 + OSM timestamp, versions, checks) and `preview/{graph,zones,zoom}.png`.
+`graph.graphml`, `zones.geojson` (effective zone polygons + river / study-area boundary / river bridges that are not in the graph), `stats.json` (counts per zone, km, bridges,
+rings, connectivity, dropped fragments, input sha256 + OSM timestamp, versions, checks) and `preview/{graph,zones,zoom}.png`
+(+ `bridges.png` with a `river:`: every river bridge, labelled).
 The build is deterministic: the same PBF and config give byte-identical outputs on the same platform with the locked versions.
 Only the largest connected component is kept. The other parts are listed in `stats.json` → `dropped_fragments`, with a
 warning if they exceed 2 % of the nodes. If a check fails, the build exits with 1 (after writing the outputs).
@@ -75,8 +76,11 @@ not hard-code any city.
   `id` = `<lowest OSM way id in the segment>-<piece index>`. `length_m` is geodesic (WGS84). `street_count` is counted before clipping; `degree` after.
 - The network filter (`network_type`) is `drive` (the OSMnx drive filter, plus `access=no` excluded), `walk` (no oneway) or `all`.
   `include_names` keeps named ways the filter would drop, and sets `restricted=true` on them (e.g. the car-free Lánchíd).
-- `river_crossing`: a bridge segment that intersects the river polygon. Such segments get the zone `river.bridge_zone`.
-  Every other segment takes the outer zone of its two endpoints.
+- `river_crossing`: a bridge segment that intersects the river polygon (config `river: {name}`). With `river.bridge_zone`
+  such segments get that zone. Every other segment takes the outer zone of its two endpoints.
+- Named river bridges the graph does not contain (railways; carriageways the network filter drops, e.g. a car-free bridge without
+  `include_names`; bridges outside the zones) are listed in `stats.json` → `river.bridges_not_in_graph` (`road` / `rail`), written to
+  `zones.geojson` (`kind: bridge_not_in_graph`) and drawn dashed in the previews. They are context only, never graph edges.
 
 ## Add a city
 Copy a config, set `name`, `pbf`, `bbox` (the load window; it must contain every zone) and list `zones:` from the inside out
@@ -94,24 +98,26 @@ continuity from river to river. `osm_admin` names match ignoring case and `a - b
 
 | config | zones |
 |---|---|
-| `budapest` | KISKORUT, NAGYKORUT, HUNGARIA (Pest rings), BUDA (west bank to the boundary-road chain), ISLAND (Margitsziget) |
+| `budapest` | whole Budapest, the 23 kerületek ordered from Deák Ferenc tér (see below); Danube bridges flagged and checked |
+| `budapest-rings` | KISKORUT, NAGYKORUT, HUNGARIA (Pest rings), BUDA (west bank to the boundary-road chain), ISLAND (Margitsziget) |
 | `budapest-districts` | districts V–VIII via `osm_admin` (test config) |
-| `budapest-city` | whole Budapest, the 23 kerületek ordered from Deák Ferenc tér (see below) |
 | `barcelona`, `berlin` | whole city: 10 districtes from Plaça de Sant Jaume / 12 Bezirke from Brandenburger Tor (Berlin untested) |
 
 ## Whole city (Superblocker-compatible)
-`budapest-city`, `berlin` and `barcelona` build the network the way [Superblocker](https://github.com/tgergo1/Superblocker)
+`budapest`, `berlin` and `barcelona` build the network the way [Superblocker](https://github.com/tgergo1/Superblocker)
 loads it live with OSMnx 2.1.1 (`graph_from_polygon(<admin polygon>, network_type="drive", simplify=True,
-retain_all=False, truncate_by_edge=True)`), but offline from the PBF: `make build CITY=budapest-city` (~45 s).
+retain_all=False, truncate_by_edge=True)`), but offline from the PBF: `make build CITY=budapest` (~45 s).
 - `area: {osm_admin: {name, admin_level}}`: the study area. The `bbox` must contain it + 500 m (OSMnx simplifies in that buffer).
 - `clip: any`: keep nodes inside plus their neighbours, like `truncate_by_edge` (default `both`: both ends inside).
 - `osmnx_compat: true`: exact OSMnx drive filter (`access=no` kept) and oneway rules; writes `osmnx.graphml`.
+  `include_names` ways (Budapest: the car-free Széchenyi lánchíd, `restricted=true`) are only in the Neo4j graph / `graph.graphml`;
+  `osmnx.graphml` is built without them, so it stays what OSMnx gives.
 - zone type `osm_admin_auto` (`admin_level`, `order_from: [lon, lat]`, optional `expect_count`): admin areas of that level inside `area`, ordered
   by centroid distance. `zone` = ID-safe name (`XIII_KERULET`), `zone_name` = OSM name. Nodes outside all zones join the nearest.
 
 `out/<city>/osmnx.graphml` is the file OSMnx `save_graphml` would write (both directions of two-way streets with `reversed`,
 `osmid` lists, great-circle `length`, `geometry` on merged edges), a drop-in for OSMnx or Superblocker:
-`G = ox.load_graphml("out/budapest-city/osmnx.graphml")`. On the same ways, OSMnx 2.1.1's own pipeline gives identical
+`G = ox.load_graphml("out/budapest/osmnx.graphml")`. On the same ways, OSMnx 2.1.1's own pipeline gives identical
 nodes, edges and attributes. Only string lists are sorted (OSMnx: hash order), `created_date` is the OSM timestamp, and parallel-edge keys can be numbered differently.
 `stats.json` → `osmnx` has Superblocker's counts. Budapest, BBBike 2026-10-02: 24,511 nodes, 63,994 directed edges, 37,386
 physical segments, 4,740.8 km; Superblocker's published run (Overpass 2026-08-31): 24,525 / 64,026 / 37,406 / 4,743.7 km.

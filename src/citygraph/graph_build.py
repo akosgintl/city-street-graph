@@ -11,7 +11,8 @@ import networkx as nx
 import numpy as np
 import shapely
 from pyproj import Geod, Transformer
-from shapely.geometry import LineString, Point
+from shapely.geometry import LineString, Point, box
+from shapely.ops import unary_union
 
 from . import export_neo4j, export_osmnx, fetch, osm_load, rings, zones as Z
 
@@ -191,6 +192,20 @@ def truncate_ways(data: osm_load.OsmData, inside: set[int], by_edge: bool) -> No
     data.ways = ways
 
 
+def clip_segs(segs: list[dict], inside: set[int], by_edge: bool) -> tuple[list[dict], list[set]]:
+    """-> (segments with both ends kept, their weakly connected components, largest first). Kept nodes are the
+    ones inside, plus with by_edge (OSMnx truncate_by_edge) their neighbours."""
+    keep = set(inside)
+    if by_edge:
+        for s in segs:
+            if s["u"] in inside:
+                keep.add(s["v"])
+            if s["v"] in inside:
+                keep.add(s["u"])
+    kept = [s for s in segs if s["u"] in keep and s["v"] in keep]
+    return kept, sorted(nx.weakly_connected_components(travel_graph(kept)), key=lambda c: (-len(c), min(c)))
+
+
 def build(cfg: dict, root: Path, out: Path, pbf: Path) -> dict:
     bbox = cfg["bbox"]
     river_cfg = cfg.get("river") or {}
@@ -268,21 +283,13 @@ def build(cfg: dict, root: Path, out: Path, pbf: Path) -> dict:
         inside = set(zone_of)
     else:
         inside = {n for n, hit in zip(node_ids, shapely.intersects(area, pts)) if hit}
-    keep = set(inside)
-    if clip == "any":
-        for s in segs:
-            if s["u"] in inside:
-                keep.add(s["v"])
-            if s["v"] in inside:
-                keep.add(s["u"])
-    kept = [s for s in segs if s["u"] in keep and s["v"] in keep]
+    kept, comps = clip_segs(segs, inside, clip == "any")
     unzoned = sorted({n for s in kept for n in (s["u"], s["v"])} - zone_of.keys())
     if unzoned:  # outside every zone (gaps, water, just outside the area): nearest zone, inner zone on ties
         tree = shapely.STRtree([z["geom"] for z in zones])
         for n in unzoned:
             zone_of[n] = min((zones[i]["zone_order"], zones[i]["zone"])
                              for i in tree.query_nearest(Point(xy[n]), all_matches=True))[1]
-    comps = sorted(nx.weakly_connected_components(travel_graph(kept)), key=lambda c: (-len(c), min(c)))
     keep_nodes = comps[0] if comps else set()
     dropped = [{"size": len(c), "nodes": sorted(c), "zones": sorted({zone_of[n] for n in c}),
                 "street_names": sorted({nm for s in kept if s["u"] in c for nm in s["names"]})[:6]} for c in comps[1:]]
@@ -317,6 +324,11 @@ def build(cfg: dict, root: Path, out: Path, pbf: Path) -> dict:
                       "street_names": sorted({nm for r in inc for nm in r["names"]})})
 
     stats = make_stats(cfg, pbf, data, nodes, rels, zones, ring_info, dropped, river, centerline, xy)
+    other_bridges = []
+    if river is not None:
+        other_bridges = river_bridges_outside_graph(data, rels, river, to_m, area if area is not None else box(
+            *unary_union([z["geom"] for z in zones]).buffer(AREA_BUFFER_M).bounds))
+        stats["river"]["bridges_not_in_graph"] = {b["name"]: b["kind"] for b in other_bridges}
     have = stats["input"]["bbox"]
     if have and not (have[0] <= bbox[0] and have[1] <= bbox[1] and bbox[2] <= have[2] and bbox[3] <= have[3]):
         stats["warnings"].append(f"the PBF covers {have}, less than the config bbox {bbox}")
@@ -326,15 +338,36 @@ def build(cfg: dict, root: Path, out: Path, pbf: Path) -> dict:
         stats["area"] = {"name": spec["name"], "admin_level": spec["admin_level"], "km2": round(area.area / 1e6, 2),
                          "clip": clip, "load_buffer_m": AREA_BUFFER_M}
     if osmnx:
-        sc = export_osmnx.street_counts(segs, keep_nodes)
-        G = export_osmnx.graph(sorted(kept, key=lambda s: (s["way_id"], int(s["id"].split("-")[1]))), sc, data,
+        ox_segs, ox_kept, ox_nodes = segs, kept, keep_nodes
+        if any(p["restricted"] for p in parts):  # include_names ways are not in OSMnx's network: build without them
+            ox_segs = simplify([p for p in parts if not p["restricted"]], cfg.get("keep_way_endpoints", False), osmnx)
+            ox_kept, ox_comps = clip_segs(ox_segs, inside, clip == "any")
+            ox_nodes = ox_comps[0] if ox_comps else set()
+            ox_kept = [s for s in ox_kept if s["u"] in ox_nodes]
+        sc = export_osmnx.street_counts(ox_segs, ox_nodes)
+        G = export_osmnx.graph(sorted(ox_kept, key=lambda s: (s["way_id"], int(s["id"].split("-")[1]))), sc, data,
                                stats["input"]["osm_timestamp"])
         stats["osmnx"] = export_osmnx.summary(G)
     export_neo4j.write_all(out, cfg, nodes, rels, zones, river, centerline, to_ll, stats,
-                           area_ll)
+                           area_ll, other_bridges)
     if G is not None:
         export_osmnx.write(G, out / "osmnx.graphml")
     return stats
+
+
+def river_bridges_outside_graph(data: osm_load.OsmData, rels: list[dict], river, to_m, within) -> list[dict]:
+    """Named road / rail bridges over the river inside `within` that the graph does not contain (dropped by the
+    network filter, railways, outside the zones). Context for zones.geojson, stats and the previews only."""
+    in_graph = {w for r in rels for w in r["osm_way_ids"]}
+    crossing = {r["bridge_name"] for r in rels if r["river_crossing"]}
+    found = defaultdict(list)
+    for wid, name, kind, line in data.bridge_ways:
+        if str(wid) not in in_graph and name not in crossing:
+            g = to_m(line)
+            if river.intersects(g) and within.intersects(g):
+                found[name].append((kind, g))
+    return [{"name": name, "kind": "rail" if any(k == "rail" for k, _ in ws) else "road",
+             "geom": unary_union([g for _, g in ws])} for name, ws in sorted(found.items())]
 
 
 # ---------------------------------------------------------------- stats & checks

@@ -29,6 +29,9 @@ NETWORK_FILTERS["drive_osmnx"] = {**NETWORK_FILTERS["drive"], "access": "private
 WAY_TAGS = ("name", "highway", "oneway", "lanes", "maxspeed", "bridge", "bridge:name", "tunnel", "junction", "ref",
             "access", "area", "est_width", "landuse", "service", "width")  # last row: rest of OSMnx useful_tags_way
 NODE_TAGS = ("highway", "junction", "railway", "ref")                       # OSMnx useful_tags_node
+# named bridges kept as context next to a river: carriageways (whatever the network filter says) and railways
+_BRIDGE_ROAD = re.compile("^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street)")
+_BRIDGE_RAIL = ("rail", "light_rail", "subway", "narrow_gauge")
 
 
 @dataclass
@@ -39,6 +42,8 @@ class OsmData:
     node_tags: dict[int, dict] = field(default_factory=dict)               # NODE_TAGS of street nodes
     river_lines: list[LineString] = field(default_factory=list)            # waterway=river centerline ways
     water_areas: list = field(default_factory=list)                        # natural=water+water=river / riverbank
+    bridge_ways: list[tuple[int, str, str, LineString]] = field(default_factory=list)  # (way id, bridge name,
+                                                                           # road|rail, line); only with a river
     admin: dict[tuple[str, str], list] = field(default_factory=dict)       # (admin_level, name) -> [(relation id,
                                                                            # (Multi)Polygon)], only those touching bbox
 
@@ -73,6 +78,15 @@ def load(pbf: Path, bbox: list[float], network: str, river: str | None, admin_le
                     d.river_lines.append(LineString([(x.lon, x.lat) for x in o.nodes]))
                 except osmium.InvalidLocationError:
                     pass
+            bname = t.get("bridge:name") or t.get("name")
+            if river and bname and t.get("bridge", "no") != "no":
+                kind = ("rail" if t.get("railway") in _BRIDGE_RAIL
+                        else "road" if _BRIDGE_ROAD.match(t.get("highway", "")) else None)
+                try:
+                    if kind and len(o.nodes) > 1:
+                        d.bridge_ways.append((o.id, bname, kind, LineString([(x.lon, x.lat) for x in o.nodes])))
+                except osmium.InvalidLocationError:
+                    pass
             restricted = False
             if not keep_way(t, network):
                 if t.get("name") not in include_names or not keep_way(t, "all"):
@@ -102,6 +116,7 @@ def load(pbf: Path, bbox: list[float], network: str, river: str | None, admin_le
                 if admin and x0 <= e and x1 >= w and y0 <= n and y1 >= s:  # names repeat across towns (Gràcia)
                     d.admin.setdefault((t["admin_level"], t["name"]), []).append((o.orig_id(), g))
     d.ways.sort(key=lambda x: x[0])
+    d.bridge_ways.sort(key=lambda x: x[0])
     for v in d.admin.values():
         v.sort(key=lambda x: x[0])
     d.signals &= d.coords.keys()

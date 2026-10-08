@@ -24,6 +24,6 @@
   ],
   "inputs": [
     { "id": "city", "type": "pickString", "description": "configs/<city>.yaml",
-      "options": ["budapest", "budapest-districts", "budapest-city", "berlin", "barcelona"], "default": "budapest" }
+      "options": ["budapest", "budapest-rings", "budapest-districts", "berlin", "barcelona"], "default": "budapest" }
   ]
 }

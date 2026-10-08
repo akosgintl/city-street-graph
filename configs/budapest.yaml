@@ -1,94 +1,38 @@
-# Central Budapest: Pest rings (Kiskörút, Nagykörút, Hungária krt) + Buda + Margitsziget.
+# Whole Budapest as Superblocker builds it: OSMnx graph_from_polygon(<Budapest admin polygon>, network_type="drive",
+# simplify=True, retain_all=False, truncate_by_edge=True). Zones: the 23 districts, ordered from Deák Ferenc tér.
 name: Budapest
-pbf: data/raw/budapest.osm.pbf          # BBBike "Budapest" extract (or citygraph clip of Geofabrik hungary)
-bbox: [18.97, 47.44, 19.14, 47.57]      # load window W S E N (lon/lat); must contain every zone
+pbf: data/raw/budapest.osm.pbf          # BBBike "Budapest" extract
+bbox: [18.90, 47.33, 19.36, 47.63]      # load window; must contain the area + 500 m
 download:                               # citygraph fetch (build fetches a missing PBF): tried in order
   - url: https://download.bbbike.org/osm/bbbike/Budapest/Budapest.osm.pbf
   - url: https://download.geofabrik.de/europe/hungary-latest.osm.pbf
     md5: https://download.geofabrik.de/europe/hungary-latest.osm.pbf.md5
     clip: [18.757, 47.325, 19.414, 47.655]  # = the BBBike extract (shared by all budapest* configs)
-network_type: drive                     # drive | walk | all
-include_names: [Széchenyi lánchíd]      # car-free since 2023 (psv/taxi/bike only); kept, flagged restricted=true
+network_type: drive
+osmnx_compat: true                      # OSMnx 2.1.1 filter/oneway rules + writes osmnx.graphml
+include_names: [Széchenyi lánchíd]      # car-free since 2023 (psv/taxi/bike only): in the Neo4j graph with
+                                        # restricted=true; osmnx.graphml stays what OSMnx builds (without it)
+area: {osm_admin: {name: Budapest, admin_level: 8}}   # relation 1244004 (level 6 "Budapest" is the same outline)
+clip: any                               # truncate_by_edge=True: keep edges with one end inside
 
 river:
-  name: Duna                            # waterway=river name; water polygons touching it form the river
-  bridge_zone: DANUBE_BRIDGE            # zone given to river-crossing bridge segments
+  name: Duna                            # flags river_crossing bridge segments; no bridge_zone: districts only
 
-# Zones inside -> outside; zone_order = position. Ring: boundary-road chain between the heads of two
-# river bridges on `bank`, preferring the listed street names, closed along the river.
 zones:
-  - zone: KISKORUT
-    type: ring
-    ring: Kiskörút
-    from: Széchenyi lánchíd
-    to: Szabadság híd
-    bank: east
-    streets: [Széchenyi István tér, József Attila utca, Deák Ferenc tér, Károly körút, Múzeum körút,
-              Vámház körút, Fővám tér]
-  - zone: NAGYKORUT
-    type: ring
-    ring: Nagykörút
-    from: Margit híd
-    to: Petőfi híd
-    bank: east
-    streets: [Jászai Mari tér, Szent István körút, Teréz körút, Erzsébet körút, József körút, Ferenc körút,
-              Boráros tér]
-  - zone: HUNGARIA
-    type: ring
-    ring: Hungária körút
-    from: Árpád híd
-    to: Rákóczi híd
-    bank: east
-    streets: [Róbert Károly körút, Hungária körút, Könyves Kálmán körút]
-  - zone: BUDA                          # west bank; `via` = anchor intersections (street-name pairs)
-    type: ring
-    from: Árpád híd
-    to: Rákóczi híd
-    bank: west
-    via:
-      - [Váradi utca, Vörösvári út]
-      - [Bécsi út, Váradi utca]
-      - [Bécsi út, Szépvölgyi út]
-      - [Pusztaszeri út, Szépvölgyi út]
-      - [Pusztaszeri út, Törökvész út]
-      - [Gábor Áron utca, Törökvész út]
-      - [Gábor Áron utca, Szilágyi Erzsébet fasor]
-      - [Szilágyi Erzsébet fasor, Széll Kálmán tér]
-      - [Alkotás utca, Krisztina körút]
-      - [Alkotás utca, Hegyalja út]
-      - [Budaörsi út, Villányi út]
-      - [Karolina út, Villányi út]
-      - [Bocskai út, Karolina út]
-      - [Bocskai út, Fehérvári út]
-      - [Fehérvári út, Hengermalom út]
-      - [Budafoki út, Hengermalom út]
-    streets: [Flórián tér, Vörösvári út, Váradi utca, Bécsi út, Szépvölgyi út, Pusztaszeri út, Törökvész út,
-              Gábor Áron utca, Szilágyi Erzsébet fasor, Széll Kálmán tér, Krisztina körút, Alkotás utca,
-              Hegyalja út, Budaörsi út, Villányi út, Karolina út, Bocskai út, Fehérvári út, Hengermalom út,
-              Budafoki út, Dombóvári út]
-  - type: osm_admin                     # Margaret Island (admin_level 10 "városrész")
-    admin_level: 10
-    areas: {ISLAND: Margitsziget}
+  - type: osm_admin_auto
+    admin_level: 9                      # kerületek: I. kerület ... XXIII. kerület
+    order_from: [19.0546, 47.4975]      # Deák Ferenc tér
+    expect_count: 23
 
 checks:
-  fail_on_error: true                   # non-zero exit if a check fails (outputs are still written)
-  bridges: [Árpád híd, Margit híd, Széchenyi lánchíd, Erzsébet híd, Szabadság híd, Petőfi híd, Rákóczi híd]
-  streets_in_zones:                     # every node on these streets must fall in one of the zones
-    Id. Antall József rakpart: [KISKORUT, NAGYKORUT, HUNGARIA]
-    Széchenyi rakpart: [KISKORUT, NAGYKORUT, HUNGARIA]
-    Jane Haining rakpart: [KISKORUT, NAGYKORUT, HUNGARIA]
-    Belgrád rakpart: [KISKORUT, NAGYKORUT, HUNGARIA]
-    Közraktár utca: [KISKORUT, NAGYKORUT, HUNGARIA]
-    Bem rakpart: [BUDA]
-    Szent Gellért rakpart: [BUDA]
-    Műegyetem rakpart: [BUDA]
-    Döbrentei tér: [BUDA]
+  fail_on_error: true
+  bridges: [Megyeri híd, Árpád híd, Margit híd, Széchenyi lánchíd, Erzsébet híd, Szabadság híd, Petőfi híd, Rákóczi híd, Deák Ferenc híd]
 
 render:
-  zoom_bbox: [19.040, 47.485, 19.070, 47.505]   # Kiskörút
+  zoom_bbox: [19.020, 47.475, 19.090, 47.520]   # inner city
 
-neo4j_params:                           # used by neo4j/sample_queries.cypher
+neo4j_params:
   from_streets: [Andrássy út, Teréz körút]      # Oktogon
   to_street: Clark Ádám tér
-  ring: Nagykörút
-  here: {latitude: 47.4939, longitude: 19.0607}  # Astoria
+  ring: null
+  here: {latitude: 47.4975, longitude: 19.0546}  # Deák Ferenc tér
