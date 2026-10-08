@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "citygraph"
+version = "0.1.0"
+description = "OpenStreetMap PBF -> Neo4j-ready street graph (intersections + street segments) with zones"
+requires-python = ">=3.12"
+dependencies = [
+    "osmium==4.3.1",
+    "shapely==2.2.0",
+    "networkx==3.7",
+    "pyproj==3.8.0",
+    "numpy==2.5.3",
+    "PyYAML==6.0.3",
+    "matplotlib==3.11.2",
+]
+
+[dependency-groups]
+dev = ["pytest==9.1.1"]
+
+[project.scripts]
+citygraph = "citygraph.cli:main"
+
+[tool.setuptools.package-data]
+citygraph = ["cypher/*.cypher"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not e2e'"
+markers = ["e2e: real Budapest download + build + Neo4j import in Docker (make e2e)"]

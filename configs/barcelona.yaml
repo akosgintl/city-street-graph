@@ -1,0 +1,32 @@
+# Whole Barcelona as Superblocker builds it (OSMnx graph_from_polygon on the admin polygon, drive, truncate_by_edge).
+# Zones: the 10 districtes, ordered from Plaça de Sant Jaume (Ciutat Vella first, then l'Eixample).
+name: Barcelona
+pbf: data/raw/barcelona.osm.pbf
+bbox: [2.02, 41.30, 2.26, 41.49]        # load (+ clip) window: municipality + 500 m + margin (W S E N)
+download:
+  - url: https://download.bbbike.org/osm/bbbike/Barcelona/Barcelona.osm.pbf
+  - url: https://download.geofabrik.de/europe/spain/cataluna-latest.osm.pbf
+    md5: https://download.geofabrik.de/europe/spain/cataluna-latest.osm.pbf.md5
+    clip: true                          # cut to bbox
+network_type: drive
+osmnx_compat: true
+area: {osm_admin: {name: Barcelona, admin_level: 8}}  # municipality (province = 6, comarca Barcelonès = 7)
+clip: any
+
+zones:
+  - type: osm_admin_auto
+    admin_level: 9                      # districtes (barris = 10)
+    order_from: [2.1771, 41.3826]       # Plaça de Sant Jaume (Pl. de Catalunya is on the Ciutat Vella/Eixample border)
+    expect_count: 10                    # build fails if a different number is found
+
+checks:
+  fail_on_error: true
+
+render:
+  zoom_bbox: [2.150, 41.375, 2.185, 41.400]   # Ciutat Vella + lower Eixample
+
+neo4j_params:
+  from_streets: [Passeig de Gràcia, Gran Via de les Corts Catalanes]
+  to_street: Via Laietana
+  ring: null
+  here: {latitude: 41.3870, longitude: 2.1700}  # Plaça de Catalunya

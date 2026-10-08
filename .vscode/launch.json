@@ -1,0 +1,29 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "citygraph build --city budapest",
+      "type": "debugpy", "request": "launch", "module": "citygraph",
+      "args": ["build", "--city", "budapest"], "cwd": "${workspaceFolder}", "justMyCode": true
+    },
+    {
+      "name": "citygraph build --city <pick>",
+      "type": "debugpy", "request": "launch", "module": "citygraph",
+      "args": ["build", "--city", "${input:city}"], "cwd": "${workspaceFolder}", "justMyCode": true
+    },
+    {
+      "name": "citygraph fetch --city <pick>",
+      "type": "debugpy", "request": "launch", "module": "citygraph",
+      "args": ["fetch", "--city", "${input:city}"], "cwd": "${workspaceFolder}", "justMyCode": true
+    },
+    {
+      "name": "citygraph render --city <pick>",
+      "type": "debugpy", "request": "launch", "module": "citygraph",
+      "args": ["render", "--city", "${input:city}"], "cwd": "${workspaceFolder}", "justMyCode": true
+    }
+  ],
+  "inputs": [
+    { "id": "city", "type": "pickString", "description": "configs/<city>.yaml",
+      "options": ["budapest", "budapest-districts", "budapest-city", "berlin", "barcelona"], "default": "budapest" }
+  ]
+}

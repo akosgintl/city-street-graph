@@ -1,0 +1,32 @@
+# Whole Budapest as Superblocker builds it: OSMnx graph_from_polygon(<Budapest admin polygon>, network_type="drive",
+# simplify=True, retain_all=False, truncate_by_edge=True). Zones: the 23 districts, ordered from Deák Ferenc tér.
+name: Budapest (city)
+pbf: data/raw/budapest.osm.pbf          # BBBike "Budapest" extract
+bbox: [18.90, 47.33, 19.36, 47.63]      # load window; must contain the area + 500 m
+download:                               # citygraph fetch (build fetches a missing PBF): tried in order
+  - url: https://download.bbbike.org/osm/bbbike/Budapest/Budapest.osm.pbf
+  - url: https://download.geofabrik.de/europe/hungary-latest.osm.pbf
+    md5: https://download.geofabrik.de/europe/hungary-latest.osm.pbf.md5
+    clip: [18.757, 47.325, 19.414, 47.655]  # = the BBBike extract (shared by all budapest* configs)
+network_type: drive
+osmnx_compat: true                      # OSMnx 2.1.1 filter/oneway rules + writes osmnx.graphml
+area: {osm_admin: {name: Budapest, admin_level: 8}}   # relation 1244004 (level 6 "Budapest" is the same outline)
+clip: any                               # truncate_by_edge=True: keep edges with one end inside
+
+zones:
+  - type: osm_admin_auto
+    admin_level: 9                      # kerületek: I. kerület ... XXIII. kerület
+    order_from: [19.0546, 47.4975]      # Deák Ferenc tér
+    expect_count: 23
+
+checks:
+  fail_on_error: true
+
+render:
+  zoom_bbox: [19.020, 47.475, 19.090, 47.520]   # inner city
+
+neo4j_params:
+  from_streets: [Andrássy út, Teréz körút]      # Oktogon
+  to_street: Clark Ádám tér
+  ring: null
+  here: {latitude: 47.4975, longitude: 19.0546}  # Deák Ferenc tér
