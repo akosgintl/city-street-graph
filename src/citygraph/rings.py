@@ -17,9 +17,10 @@ HEAD_RADIUS_M = 150.0   # "drivable" ring checks start/end at ring nodes this cl
 
 
 # ---------------------------------------------------------------- river
-def centerline(lines: list[LineString]) -> LineString | None:
+def centerline(lines: list[LineString], window=None) -> LineString | None:
     """Merge waterway=river ways into one line: shortest path between the two most distant open ends
-    (drops parallel arms around islands)."""
+    (drops parallel arms around islands). If the ways do not join up (a stretch mapped under another name, a lake
+    in between), only the connected part with the most length inside `window` is used."""
     merged = linemerge(lines) if lines else None
     if merged is None or merged.is_empty:
         return None
@@ -29,9 +30,14 @@ def centerline(lines: list[LineString]) -> LineString | None:
         a, b = p.coords[0], p.coords[-1]
         if not G.has_edge(a, b) or G[a][b]["len"] > p.length:
             G.add_edge(a, b, len=p.length, i=i)
-    ends = sorted(n for n in G if G.degree(n) == 1)
+    comps = list(nx.connected_components(G))
+    if len(comps) > 1:
+        size = lambda c: sum((p if window is None else p.intersection(window)).length  # noqa: E731
+                             for p in parts if p.coords[0] in c)
+        comps.sort(key=lambda c: (-size(c), min(c)))
+    ends = sorted(n for n in comps[0] if G.degree(n) == 1)
     if len(ends) < 2:
-        return max(parts, key=lambda p: p.length)
+        return max((p for p in parts if p.coords[0] in comps[0]), key=lambda p: p.length)
     a, b = max(((x, y) for x in ends for y in ends if x < y), key=lambda xy: math.dist(*xy))
     path = nx.shortest_path(G, a, b, weight="len")
     coords = [path[0]]
@@ -41,9 +47,9 @@ def centerline(lines: list[LineString]) -> LineString | None:
     return LineString(coords)
 
 
-def river_geometry(data, name: str, bbox, to_m) -> tuple:
+def river_geometry(data, name: str | list[str], bbox, to_m) -> tuple:
     """-> (river polygon, centerline), metric. Polygon = water areas touching the named centerline."""
-    cl = centerline(data.river_lines)
+    cl = centerline(data.river_lines, box(*bbox))
     if cl is None:
         raise SystemExit(f"river {name!r}: no waterway=river way with that name in the PBF")
     frame = to_m(box(*bbox)).buffer(2000)

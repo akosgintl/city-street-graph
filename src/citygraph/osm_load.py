@@ -44,8 +44,8 @@ class OsmData:
     water_areas: list = field(default_factory=list)                        # natural=water+water=river / riverbank
     bridge_ways: list[tuple[int, str, str, LineString]] = field(default_factory=list)  # (way id, bridge name,
                                                                            # road|rail, line); only with a river
-    admin: dict[tuple[str, str], list] = field(default_factory=dict)       # (admin_level, name) -> [(relation id,
-                                                                           # (Multi)Polygon)], only those touching bbox
+    admin: dict[tuple[str, str], list] = field(default_factory=dict)       # (admin_level or boundary type, name) ->
+                                                                           # [(relation id, (Multi)Polygon)], touching bbox
 
 
 def keep_way(tags, network: str) -> bool:
@@ -54,15 +54,19 @@ def keep_way(tags, network: str) -> bool:
     return not any(k in tags and re.search(rx, tags[k]) for k, rx in NETWORK_FILTERS[network].items())
 
 
-def load(pbf: Path, bbox: list[float], network: str, river: str | None, admin_levels: set[str],
+def load(pbf: Path, bbox: list[float], network: str, river: str | list[str] | None, admin_levels: set[str],
          include_names: set[str] = frozenset()) -> OsmData:
     """One pass over the file. Keeps every filtered highway way with at least one node inside bbox.
-    Ways named in include_names are kept even if the network filter drops them (tagged restricted)."""
+    Ways named in include_names are kept even if the network filter drops them (tagged restricted).
+    admin_levels: admin_level values of boundary=administrative, or other boundary=* types (local_authority).
+    river: the waterway=river name, or the names of its sections (Spree, Treptower Spree)."""
     w, s, e, n = bbox
+    river = {river} if isinstance(river, str) else set(river or ())
     d = OsmData()
     wkb = osmium.geom.WKBFactory()
     fp = (osmium.FileProcessor(str(pbf)).with_locations()
-          .with_areas(TagFilter(("boundary", "administrative"), ("natural", "water"), ("waterway", "riverbank")))
+          .with_areas(TagFilter(("boundary", "administrative"), ("natural", "water"), ("waterway", "riverbank"),
+                                *(("boundary", k) for k in sorted(admin_levels) if not k.isdigit())))
           .with_filter(KeyFilter("highway", "waterway", "natural", "boundary", "railway", "junction", "ref")))
     for o in fp:
         t = o.tags
@@ -73,7 +77,8 @@ def load(pbf: Path, bbox: list[float], network: str, river: str | None, admin_le
             if nt:
                 d.node_tags[o.id] = nt
         elif o.is_way():
-            if river and t.get("waterway") == "river" and t.get("name") == river:
+            if river and t.get("name") in river and (t.get("waterway") == "river" or (  # a lock chamber in the
+                    t.get("waterway") == "canal" and t.get("lock") == "yes")):          # river is mapped as a canal
                 try:
                     d.river_lines.append(LineString([(x.lon, x.lat) for x in o.nodes]))
                 except osmium.InvalidLocationError:
@@ -103,8 +108,8 @@ def load(pbf: Path, bbox: list[float], network: str, river: str | None, admin_le
             d.ways.append((o.id, [p[0] for p in pts], {**{k: t[k] for k in WAY_TAGS if k in t}, "restricted": restricted}))
         elif o.is_area():
             water = (t.get("natural") == "water" and t.get("water") == "river") or t.get("waterway") == "riverbank"
-            admin = (not o.from_way() and t.get("boundary") == "administrative"
-                     and t.get("admin_level") in admin_levels and "name" in t)
+            key = t.get("admin_level") if t.get("boundary") == "administrative" else t.get("boundary")
+            admin = not o.from_way() and key in admin_levels and "name" in t
             if water or admin:
                 try:
                     g = shapely.from_wkb(wkb.create_multipolygon(o))
@@ -114,7 +119,7 @@ def load(pbf: Path, bbox: list[float], network: str, river: str | None, admin_le
                     d.water_areas.append(g)
                 x0, y0, x1, y1 = g.bounds
                 if admin and x0 <= e and x1 >= w and y0 <= n and y1 >= s:  # names repeat across towns (Gràcia)
-                    d.admin.setdefault((t["admin_level"], t["name"]), []).append((o.orig_id(), g))
+                    d.admin.setdefault((key, t["name"]), []).append((o.orig_id(), g))
     d.ways.sort(key=lambda x: x[0])
     d.bridge_ways.sort(key=lambda x: x[0])
     for v in d.admin.values():

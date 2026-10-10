@@ -1,8 +1,8 @@
 # Whole Berlin as Superblocker builds it (OSMnx graph_from_polygon on the admin polygon, drive, truncate_by_edge).
-# UNTESTED (no Berlin data yet). If a name/level does not match, the build stops and lists what it found.
+# Zones: the 12 Bezirke, ordered from the Brandenburger Tor.
 name: Berlin
-pbf: data/raw/berlin.osm.pbf
-bbox: [13.06, 52.31, 13.79, 52.70]      # load (+ clip) window; must contain the area + 500 m
+pbf: data/raw/berlin.osm.pbf            # BBBike "Berlin" extract: [12.76, 52.23, 13.98, 52.82], well past the city border
+bbox: [13.06, 52.31, 13.79, 52.70]      # load (+ clip) window; must contain the area + 500 m = [13.081, 52.334, 13.769, 52.680]
 download:
   - url: https://download.bbbike.org/osm/bbbike/Berlin/Berlin.osm.pbf
   - url: https://download.geofabrik.de/europe/germany/brandenburg-latest.osm.pbf   # Brandenburg incl. Berlin
@@ -12,23 +12,35 @@ download:
     md5: https://download.geofabrik.de/europe/germany/berlin-latest.osm.pbf.md5
 network_type: drive
 osmnx_compat: true
-area: {osm_admin: {name: Berlin, admin_level: 4}}     # city-state (relation 62422)
+area: {osm_admin: {name: Berlin, admin_level: 4}}     # city-state (relation 62422), 890.7 km²
 clip: any
+
+river:                                  # the Spree from the Müggelsee to its mouth in the Havel. OSM maps it in stretches
+  name: [Spree, Treptower Spree, Katzengraben, Müggelspree]   # under local names (Katzengraben: the arm at Köpenick).
+                                        # Its water polygon reaches into the Havel at Spandau: 4 Havel bridges are flagged too.
+                                        # Canals (Landwehrkanal, Spreekanal, Teltowkanal ...) and the Dahme are not part of it.
 
 zones:
   - type: osm_admin_auto
-    admin_level: 9                      # 12 Bezirke (Ortsteile are 10) - verify once the PBF is here: stats.json -> zones
-    order_from: [13.3777, 52.5163]      # Brandenburger Tor (from Alexanderplatz, Friedrichshain-Kreuzberg may come first)
+    admin_level: 9                      # the 12 Bezirke (Ortsteile are level 10, there are 97)
+    order_from: [13.3777, 52.5163]      # Brandenburger Tor: Mitte first (from Alexanderplatz, Friedrichshain-Kreuzberg would be)
     expect_count: 12
 
 checks:
   fail_on_error: true
+  # Spree road bridges, west -> east; each connects both banks in both directions. Not listed: Kronprinzenbrücke and
+  # Mühlendammbrücke (no bridge name in OSM: they appear as Konrad-Adenauer-Straße / Mühlendamm), Treskowbrücke (one-way
+  # in OSM), bridges over harbour basins (Hugo-Preuß-, Klingenberg-, Nonnendammbrücke). Schlossbrücke: the Charlottenburg one.
+  # Moltkebrücke: stats also count the namesake in Lichterfelde (a bridge is looked up by name only).
+  bridges: [Rudolf-Wissell-Brücke, Schlossbrücke, Gotzkowskybrücke, Lessingbrücke, Lutherbrücke, Moltkebrücke,
+            Marschallbrücke, Weidendammer Brücke, Liebknechtbrücke, Jannowitzbrücke, Michaelbrücke, Schillingbrücke,
+            Oberbaumbrücke, Elsenbrücke, Minna-Todenhagen-Brücke, Wilhelm-Spindler-Brücke]
 
 render:
-  zoom_bbox: [13.360, 52.500, 13.440, 52.540]   # Mitte
+  zoom_bbox: [13.360, 52.495, 13.452, 52.535]   # Mitte: the Spree from the Moltkebrücke to the Oberbaumbrücke
 
 neo4j_params:
   from_streets: [Unter den Linden, Friedrichstraße]
   to_street: Karl-Marx-Allee
   ring: null
-  here: {latitude: 52.5219, longitude: 13.4132}  # Alexanderplatz
+  here: {latitude: 52.5096, longitude: 13.3759}  # Potsdamer Platz

@@ -156,16 +156,10 @@ def travel_graph(rels) -> nx.DiGraph:
 
 
 def area_polygon(cfg: dict, data: osm_load.OsmData):
-    """Config `area: {osm_admin: {name, admin_level}}` -> (Multi)Polygon (lon/lat) or None."""
+    """Config `area: {osm_admin: {name, admin_level}}` (or `{name, boundary}` for a boundary=* type that is not
+    administrative) -> (Multi)Polygon (lon/lat) or None."""
     spec = (cfg.get("area") or {}).get("osm_admin")
-    if not spec:
-        return None
-    lvl = str(spec["admin_level"])
-    hit = [gs for (lv, n), gs in sorted(data.admin.items()) if lv == lvl and Z.norm(n) == Z.norm(spec["name"])]
-    if not hit:
-        have = sorted(n for lv, n in data.admin if lv == lvl)
-        raise SystemExit(f"area {spec['name']!r} (admin_level {lvl}) not in PBF; available: {have}")
-    return Z.unique(hit[0], spec["name"], lvl)
+    return Z.find_admin(data.admin, spec) if spec else None
 
 
 def truncate_ways(data: osm_load.OsmData, inside: set[int], by_edge: bool) -> None:
@@ -215,8 +209,9 @@ def build(cfg: dict, root: Path, out: Path, pbf: Path) -> dict:
     osmnx = bool(cfg.get("osmnx_compat"))
     network = cfg.get("network_type", "drive")
     levels = {str(z["admin_level"]) for z in cfg["zones"] if z.get("type", z.get("source")) in ("osm_admin", "osm_admin_auto")}
+    levels |= {Z.admin_key(z["within"]) for z in cfg["zones"] if z.get("within")}
     if cfg.get("area"):
-        levels.add(str(cfg["area"]["osm_admin"]["admin_level"]))
+        levels.add(Z.admin_key(cfg["area"]["osm_admin"]))
     data = osm_load.load(pbf, bbox, f"{network}_osmnx" if osmnx and network == "drive" else network,
                          river_cfg.get("name"), levels, set(cfg.get("include_names") or []))
     epsg = utm_epsg(bbox)
@@ -335,7 +330,8 @@ def build(cfg: dict, root: Path, out: Path, pbf: Path) -> dict:
     G = None
     if area is not None:
         spec = cfg["area"]["osm_admin"]
-        stats["area"] = {"name": spec["name"], "admin_level": spec["admin_level"], "km2": round(area.area / 1e6, 2),
+        stats["area"] = {"name": spec["name"], **{k: spec[k] for k in ("admin_level", "boundary") if k in spec},
+                         "km2": round(area.area / 1e6, 2),
                          "clip": clip, "load_buffer_m": AREA_BUFFER_M}
     if osmnx:
         ox_segs, ox_kept, ox_nodes = segs, kept, keep_nodes

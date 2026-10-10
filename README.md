@@ -1,18 +1,18 @@
 # city-street-graph
 
 Turns an OpenStreetMap `.osm.pbf` into a Neo4j-ready street graph. Nodes are intersections and dead ends.
-Relationships are street segments. Each city is one YAML file in `configs/`. Budapest is built and checked.
-Berlin, Barcelona and other cities only need a config; the PBF is downloaded (see Get data).
+Relationships are street segments. Each city is one YAML file in `configs/`. Budapest, Berlin and Barcelona are built and checked.
+Other cities only need a config; the PBF is downloaded (see Get data).
 
 ## Setup (Python 3.12+, [uv](https://docs.astral.sh/uv/), run everything from the project root)
 ```bash
 make setup        # uv sync --locked: .venv with the exact versions from uv.lock + the editable package
 make test         # uv run pytest -q: synthetic OSM fixture (+ checks on out/budapest once it is built)
 ```
-`make e2e` (= `uv run pytest -m e2e -v`, ~2 min, needs internet + a running Docker) is the real run for central Budapest
-(`budapest-rings`): it downloads the PBF, builds through the CLI (twice, to compare the bytes), imports `out/budapest-rings/neo4j` into a throwaway Neo4j container
+`make e2e` (= `uv run pytest -m e2e -v`, ~3 min, needs internet + a running Docker) is the real run for whole Budapest
+(`budapest`): it downloads the PBF, builds through the CLI (twice, to compare the bytes), imports `out/budapest/neo4j` into a throwaway Neo4j container
 (compose project `citygraph-e2e`, ports 17474/17687, removed afterwards; `E2E_KEEP=1` keeps it, password `citygraph-e2e`)
-and checks counts, schema, properties, bridges, rings and the sample queries against the CSVs and `stats.json`.
+and checks counts, schema, properties, bridges and the sample queries against the CSVs and `stats.json`.
 Without make (same commands on Windows PowerShell):
 ```bash
 uv sync --locked
@@ -41,7 +41,7 @@ Output goes to `out/<city>/`:
 `neo4j/{intersections.csv, streets.csv, import.cypher, sample_queries.cypher}`,
 `graph.graphml`, `zones.geojson` (effective zone polygons + river / study-area boundary / river bridges that are not in the graph), `stats.json` (counts per zone, km, bridges,
 rings, connectivity, dropped fragments, input sha256 + OSM timestamp, versions, checks) and `preview/{graph,zones,zoom}.png`
-(+ `bridges.png` with a `river:`: every river bridge, labelled).
+(+ `bridges.png` with a `river:`: every river bridge, labelled; names beside the map, or above it for a river running east-west).
 The build is deterministic: the same PBF and config give byte-identical outputs on the same platform with the locked versions.
 Only the largest connected component is kept. The other parts are listed in `stats.json` → `dropped_fragments`, with a
 warning if they exceed 2 % of the nodes. If a check fails, the build exits with 1 (after writing the outputs).
@@ -78,6 +78,9 @@ not hard-code any city.
   `include_names` keeps named ways the filter would drop, and sets `restricted=true` on them (e.g. the car-free Lánchíd).
 - `river_crossing`: a bridge segment that intersects the river polygon (config `river: {name}`). With `river.bridge_zone`
   such segments get that zone. Every other segment takes the outer zone of its two endpoints.
+  `river.name` can be a list when OSM maps the river in stretches under different names (Berlin: `[Spree, Treptower Spree, …]`).
+  Lock chambers (`waterway=canal` + `lock=yes`) with such a name belong to it. If the stretches still do not join up, the
+  connected part with the most length inside the `bbox` is the centerline.
 - Named river bridges the graph does not contain (railways; carriageways the network filter drops, e.g. a car-free bridge without
   `include_names`; bridges outside the zones) are listed in `stats.json` → `river.bridges_not_in_graph` (`road` / `rail`), written to
   `zones.geojson` (`kind: bridge_not_in_graph`) and drawn dashed in the previews. They are context only, never graph edges.
@@ -99,21 +102,23 @@ continuity from river to river. `osm_admin` names match ignoring case and `a - b
 | config | zones |
 |---|---|
 | `budapest` | whole Budapest, the 23 kerületek ordered from Deák Ferenc tér (see below); Danube bridges flagged and checked |
-| `budapest-rings` | KISKORUT, NAGYKORUT, HUNGARIA (Pest rings), BUDA (west bank to the boundary-road chain), ISLAND (Margitsziget) |
-| `budapest-districts` | districts V–VIII via `osm_admin` (test config) |
-| `barcelona`, `berlin` | whole city: 10 districtes from Plaça de Sant Jaume / 12 Bezirke from Brandenburger Tor (Berlin untested) |
+| `berlin` | whole Berlin, the 12 Bezirke ordered from the Brandenburger Tor; Spree bridges flagged, 16 of them checked |
+| `barcelona` | metropolitan Barcelona (AMB, 36 municipalities, 638 km²): the 10 districtes + the other 35 municipalities, ordered from Plaça de Sant Jaume; Besòs bridges flagged and checked |
 
 ## Whole city (Superblocker-compatible)
-`budapest`, `berlin` and `barcelona` build the network the way [Superblocker](https://github.com/tgergo1/Superblocker)
+`budapest`, `berlin` and `barcelona` (metropolitan area) build the network the way [Superblocker](https://github.com/tgergo1/Superblocker)
 loads it live with OSMnx 2.1.1 (`graph_from_polygon(<admin polygon>, network_type="drive", simplify=True,
 retain_all=False, truncate_by_edge=True)`), but offline from the PBF: `make build CITY=budapest` (~45 s).
 - `area: {osm_admin: {name, admin_level}}`: the study area. The `bbox` must contain it + 500 m (OSMnx simplifies in that buffer).
+  `{name, boundary: local_authority}` selects a relation that is not `boundary=administrative` (Barcelona: the AMB).
 - `clip: any`: keep nodes inside plus their neighbours, like `truncate_by_edge` (default `both`: both ends inside).
 - `osmnx_compat: true`: exact OSMnx drive filter (`access=no` kept) and oneway rules; writes `osmnx.graphml`.
   `include_names` ways (Budapest: the car-free Széchenyi lánchíd, `restricted=true`) are only in the Neo4j graph / `graph.graphml`;
   `osmnx.graphml` is built without them, so it stays what OSMnx gives.
 - zone type `osm_admin_auto` (`admin_level`, `order_from: [lon, lat]`, optional `expect_count`): admin areas of that level inside `area`, ordered
   by centroid distance. `zone` = ID-safe name (`XIII_KERULET`), `zone_name` = OSM name. Nodes outside all zones join the nearest.
+  Optional `within: {name, admin_level}` takes the areas inside that admin area instead of `area`, and `exclude: [names]` skips
+  some, so two entries can mix levels (Barcelona: the districtes `within` Barcelona, then the municipalities except Barcelona).
 
 `out/<city>/osmnx.graphml` is the file OSMnx `save_graphml` would write (both directions of two-way streets with `reversed`,
 `osmid` lists, great-circle `length`, `geometry` on merged edges), a drop-in for OSMnx or Superblocker:
@@ -121,10 +126,14 @@ retain_all=False, truncate_by_edge=True)`), but offline from the PBF: `make buil
 nodes, edges and attributes. Only string lists are sorted (OSMnx: hash order), `created_date` is the OSM timestamp, and parallel-edge keys can be numbered differently.
 `stats.json` → `osmnx` has Superblocker's counts. Budapest, BBBike 2026-10-02: 24,511 nodes, 63,994 directed edges, 37,386
 physical segments, 4,740.8 km; Superblocker's published run (Overpass 2026-08-31): 24,525 / 64,026 / 37,406 / 4,743.7 km.
+Berlin (890.7 km², `make build CITY=berlin` ~85 s), BBBike 2026-10-02: 28,593 nodes, 73,982 directed edges, 45,086 physical
+segments, 6,581.3 km; not compared with a Superblocker run.
+Barcelona (AMB, 638.5 km², ~70 s), BBBike 2026-10-02: 35,537 nodes, 68,387 directed edges, 54,211 physical segments,
+5,540.9 km; not compared with a Superblocker run.
 
 ## Caveats
 - `ring` zones, bridges and their checks live in `rings.py`. The generic path (`zones.py`) is osm_admin/geojson.
-- The ring and Buda boundaries are modelling choices made in the config. The real river polygon defines the banks. Bridge-deck nodes
+- `ring` zone boundaries are modelling choices made in the config. The real river polygon defines the banks. Bridge-deck nodes
   over water join the nearest zone.
 - `clip` keeps a relation only if one of its members lies in the bbox. A boundary polygon that fully encloses the bbox is lost, so make the
   bbox larger than the zones.

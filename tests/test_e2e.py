@@ -1,7 +1,7 @@
-"""End-to-end run for central Budapest (configs/budapest-rings.yaml) with nothing mocked: download the PBF, build through the CLI, import into Neo4j
+"""End-to-end run for whole Budapest (configs/budapest.yaml) with nothing mocked: download the PBF, build through the CLI, import into Neo4j
 in Docker and query it. Opt-in (`make e2e` = `pytest -m e2e`): needs internet and a running Docker daemon.
 
-It writes the real data/raw/budapest.osm.pbf and out/budapest-rings/. Neo4j runs as its own compose project
+It writes the real data/raw/budapest.osm.pbf and out/budapest/. Neo4j runs as its own compose project
 (citygraph-e2e, ports 17474/17687), so a `make neo4j-up` database is left alone; E2E_KEEP=1 keeps it running."""
 import base64
 import csv
@@ -24,7 +24,7 @@ from citygraph import fetch
 pytestmark = pytest.mark.e2e
 
 ROOT = Path(__file__).resolve().parents[1]
-CITY = "budapest-rings"
+CITY = "budapest"
 OUT = ROOT / "out" / CITY
 CFG = yaml.safe_load((ROOT / "configs" / f"{CITY}.yaml").read_text(encoding="utf-8"))
 PBF = ROOT / CFG["pbf"]
@@ -82,7 +82,7 @@ def built() -> dict:
 
 @pytest.fixture(scope="module")
 def neo4j(built):
-    """Fresh Neo4j container with out/budapest-rings/neo4j mounted, import.cypher loaded."""
+    """Fresh Neo4j container with out/budapest/neo4j mounted, import.cypher loaded."""
     if not shutil.which("docker") or subprocess.run(["docker", "info"], capture_output=True).returncode:
         pytest.fail("Docker is not running (the e2e test needs it)")
     run([*COMPOSE, "down", "-v", "--remove-orphans"])
@@ -123,14 +123,16 @@ def test_build_outputs(built):
         assert (OUT / f).stat().st_size > 0, f
     assert all((OUT / "preview" / f).read_bytes()[:8] == b"\x89PNG\r\n\x1a\n" for f in PREVIEWS)
     assert (len(nodes), len(rels)) == (stats["totals"]["nodes"], stats["totals"]["segments"])
-    assert 3000 < len(nodes) < 5000 and 500 < stats["totals"]["km"] < 700           # central Budapest, drive network
+    assert 20000 < len(nodes) < 30000 and 4000 < stats["totals"]["km"] < 5500       # whole Budapest, drive network
     assert abs(sum(float(r["length_m"]) for r in rels) / 1000 - stats["totals"]["km"]) < 0.1
     ids = {n["id"] for n in nodes}
     assert all(r["start_id"] in ids and r["end_id"] in ids for r in rels)
-    zones = [z.get("zone") or next(iter(z["areas"])) for z in CFG["zones"]]
-    assert list(stats["zones"]) == [*zones, CFG["river"]["bridge_zone"]]            # inside -> outside, bridges last
+    zones = list(stats["zones"])                                                    # the districts, inside -> outside
+    assert len(zones) == sum(z["expect_count"] for z in CFG["zones"]) and zones[0] == "V_KERULET"
     assert all(stats["zones"][z]["nodes"] > 0 for z in zones)
     assert {n["zone"] for n in nodes} == set(zones)
+    order = {n["zone"]: int(n["zone_order"]) for n in nodes}
+    assert [order[z] for z in zones] == sorted(order.values())
     assert stats["connectivity"]["largest_scc_share"] > 0.98
 
 
@@ -140,8 +142,7 @@ def test_bridges_and_rings(built):
     for name, b in stats["bridges"].items():
         assert b["ok"] and b["river_crossing"] and b["left_to_right"] and b["right_to_left"], name
     crossing = [r for r in rels if r["river_crossing"] == "true"]
-    assert {r["bridge_name"] for r in crossing} == set(CFG["checks"]["bridges"])
-    assert {r["zone"] for r in crossing} == {CFG["river"]["bridge_zone"]}
+    assert {r["bridge_name"] for r in crossing} >= set(CFG["checks"]["bridges"])    # + the island bridges (K-híd)
     assert set(stats["rings"]) == {z["ring"] for z in CFG["zones"] if z.get("ring")}
     assert all(r["continuous_undirected"] for r in stats["rings"].values())
     assert any(r["restricted"] == "true" and "Széchenyi lánchíd" in r["names"] for r in rels)   # include_names
@@ -240,9 +241,9 @@ def test_neo4j_sample_queries(built, neo4j):
     assert any(s and "híd" in s for s in streets)                                  # has to cross the Danube
     near = cypher("WITH point($here) AS here MATCH (n:Intersection) WHERE point.distance(n.location, here) < 150 "
                   "RETURN n.street_names, point.distance(n.location, here) AS m ORDER BY m LIMIT 5", **q)
-    assert near and any("Rákóczi út" in names for names, _ in near)                # Astoria
-    signals = cypher("MATCH (n:Intersection)-[:STREET {ring: $ring}]-() WHERE n.traffic_signals RETURN count(DISTINCT n)", **q)
-    assert signals[0][0] > 10
+    assert near and any("Deák Ferenc tér" in names for names, _ in near)
+    signals = cypher("MATCH (n:Intersection) WHERE n.traffic_signals RETURN count(n)")
+    assert signals[0][0] == sum(n["traffic_signals"] == "true" for n in built["nodes"]) > 100
 
 
 def test_neo4j_import_is_idempotent(built, neo4j):

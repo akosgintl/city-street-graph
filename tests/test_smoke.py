@@ -114,6 +114,35 @@ def test_area_auto_zones_and_clip(built, tmp_path):
         graph_build.build({**cfg, "zones": [{**cfg["zones"][0], "expect_count": 3}]}, tmp, tmp_path / "x", tmp / "test.osm")
 
 
+def test_boundary_area_and_zone_groups(built, tmp_path):
+    """Study area from a boundary=* relation that is not administrative; two osm_admin_auto groups of level-10
+    halves: `within` the level-9 district minus `exclude`, then the rest of the area."""
+    tmp, _ = built
+    xml = (tmp / "test.osm").read_text(encoding="utf-8").replace("</osm>", (
+        '<relation id="400" version="1"><member type="way" ref="200" role="outer"/><tag k="type" v="boundary"/>'
+        '<tag k="boundary" v="local_authority"/><tag k="name" v="Metro"/></relation>\n</osm>'))
+    (tmp_path / "metro.osm").write_text(xml, encoding="utf-8")
+    inner = {"type": "osm_admin_auto", "admin_level": 10, "order_from": [19.003, 47.5025],
+             "within": {"name": "Test district", "admin_level": 9}, "exclude": ["nyugat"], "expect_count": 1}
+    cfg = {**CFG, "bbox": [18.98, 47.48, 19.02, 47.52], "clip": "any",
+           "area": {"osm_admin": {"name": "metro", "boundary": "local_authority"}},
+           "zones": [inner, {"type": "osm_admin_auto", "admin_level": 10, "order_from": [19.003, 47.5025],
+                             "exclude": ["Kelet-Dél"], "expect_count": 1}]}
+    stats = graph_build.build(cfg, tmp_path, tmp_path / "out", tmp_path / "metro.osm")
+    assert stats["area"]["boundary"] == "local_authority" and "admin_level" not in stats["area"]
+    assert list(stats["zones"]) == ["KELET_DEL", "NYUGAT"] and all(stats["checks"].values())
+    nodes = {n["id"]: n["zone"] for n in read(tmp_path / "out/neo4j/intersections.csv")}
+    assert nodes["9"] == "KELET_DEL" and nodes["4"] == "NYUGAT"
+    plain = graph_build.build({**cfg, "area": {"osm_admin": {"name": "Test district", "admin_level": 9}}},
+                              tmp_path, tmp_path / "plain", tmp_path / "metro.osm")
+    assert plain["totals"] == stats["totals"]                             # same polygon -> same graph
+    with pytest.raises(SystemExit, match="boundary=local_authority"):    # unknown name lists what exists
+        graph_build.build({**cfg, "area": {"osm_admin": {"name": "Nope", "boundary": "local_authority"}}},
+                          tmp_path, tmp_path / "x", tmp_path / "metro.osm")
+    with pytest.raises(SystemExit, match="zone ids are not unique"):
+        graph_build.build({**cfg, "zones": [inner, inner]}, tmp_path, tmp_path / "x", tmp_path / "metro.osm")
+
+
 def test_river_bridges(tmp_path):
     """A river between grid columns 0 and 1: way 101 is a bridge in the graph; a railway bridge and a car-free
     road bridge are reported (and drawn) as river bridges outside the graph."""
@@ -136,6 +165,40 @@ def test_river_bridges(tmp_path):
     assert sorted(f["properties"]["name"] for f in feats if f["properties"].get("kind") == "bridge_not_in_graph") == [
         "Lánc híd", "Vasúti híd"]
     assert [p.name for p in render.render(tmp_path / "out", "Test")] == ["graph.png", "zones.png", "zoom.png", "bridges.png"]
+
+
+def test_river_sections_and_wide_bridge_labels(tmp_path):
+    """A river running west -> east between grid rows 0 and 1, mapped in stretches: `Folyó`, a lock chamber
+    (waterway=canal + lock=yes) and `Alsó-Folyó`. A longer `Folyó` stretch far outside the load window is not
+    connected to them and must not become the centerline."""
+    nodes = {**NODES, 80: (18.9996, 47.5003), 81: (19.0034, 47.5003), 82: (19.0034, 47.5007), 83: (18.9996, 47.5007),
+             84: (18.9997, 47.5005), 86: (19.0004, 47.5005), 87: (19.0006, 47.5005), 88: (19.0033, 47.5005),
+             90: (19.02, 47.5005), 91: (19.08, 47.5005)}
+    bridge = {110: "Nyugati híd", 111: "Keleti híd"}
+    ways = [(w, r, {**t, "name": bridge[w], "bridge": "yes"} if w in bridge else t) for w, r, t in WAYS[:-3]] + [
+        (160, [80, 81, 82, 83, 80], {"natural": "water", "water": "river"}),
+        (161, [84, 86], {"waterway": "river", "name": "Folyó"}),
+        (162, [86, 87], {"waterway": "canal", "lock": "yes", "name": "Folyó"}),
+        (163, [87, 88], {"waterway": "river", "name": "Alsó-Folyó"}),
+        (164, [90, 91], {"waterway": "river", "name": "Folyó"})] + WAYS[-3:]
+    write_osm(tmp_path / "river.osm", nodes, ways)
+    cfg = {**CFG, "river": {"name": ["Folyó", "Alsó-Folyó"]}, "checks": {"bridges": ["Nyugati híd"]}}
+    stats = graph_build.build(cfg, tmp_path, tmp_path / "out", tmp_path / "river.osm")
+    assert all(stats["checks"].values()) and stats["bridges"]["Nyugati híd"]["ok"]
+    assert stats["river"]["name"] == ["Folyó", "Alsó-Folyó"]
+    assert stats["river"]["crossing_bridges"] == {"Keleti híd": 1, "Nyugati híd": 1}
+    feats = json.loads((tmp_path / "out/zones.geojson").read_text(encoding="utf-8"))["features"]
+    (cl,) = [f["geometry"]["coordinates"] for f in feats if f["properties"].get("kind") == "river_centerline"]
+    assert (round(cl[0][0], 4), round(cl[-1][0], 4)) == (18.9997, 19.0033)     # joined through the lock chamber
+    assert [p.name for p in render.render(tmp_path / "out", "Test")] == ["graph.png", "zones.png", "zoom.png", "bridges.png"]
+    # landscape crop: slanted names above the map, east -> west, pushed apart where the bridges are close
+    fig, ax = render.plt.subplots(figsize=(9, 4.5))
+    render.label_bridges(ax, {("A", "in_graph"): [[(0.10, 0.5), (0.10, 0.6)]], ("B", "rail"): [[(0.11, 0.5), (0.11, 0.6)]],
+                              ("C", "in_graph"): [[(1.8, 0.2), (1.8, 0.3)]]}, (0.0, 0.0, 2.0, 1.0))
+    xs = [t.get_position()[0] for t in ax.texts]
+    assert [t.get_text() for t in ax.texts] == ["C", "B  (railway, not in the graph)", "A"]
+    assert {t.get_rotation() for t in ax.texts} == {60.0} and xs[0] > xs[1] > xs[2] and xs[1] - xs[2] > 0.02
+    render.plt.close(fig)
 
 
 OUT = ROOT / "out" / "budapest"

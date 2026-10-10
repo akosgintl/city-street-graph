@@ -12,7 +12,7 @@ Everything goes through uv. Do not call `pip`, `python -m venv` or a bare `pytho
 uv sync --locked                          # create/update .venv from uv.lock (= make setup)
 uv run pytest -q                          # all tests (= make test), ~5 s
 uv run pytest tests/test_smoke.py::test_topology -q
-uv run pytest -m e2e -v                   # = make e2e: real budapest-rings download + build + Neo4j in Docker, ~2 min
+uv run pytest -m e2e -v                   # = make e2e: real budapest download + build + Neo4j in Docker, ~3 min
 uv run citygraph build --city budapest    # = make build CITY=budapest; downloads the PBF if missing
 uv run citygraph build --city budapest --no-fetch --no-render
 uv run citygraph fetch|render|info|clip ...
@@ -42,7 +42,7 @@ src/citygraph/
   cypher/          import.cypher and sample_queries.cypher templates (package data)
 configs/           one YAML per city
 tests/             synthetic OSM fixture written by test_smoke.write_osm; test_fetch uses a local HTTP server;
-                   test_e2e.py is the opt-in real run of configs/budapest-rings.yaml
+                   test_e2e.py is the opt-in real run of configs/budapest.yaml
 data/raw/          downloaded PBFs (git-ignored)
 out/<city>/        build outputs (git-ignored)
 ```
@@ -55,7 +55,7 @@ out/<city>/        build outputs (git-ignored)
 - City-specific knowledge belongs in `configs/*.yaml`, never in the code or the cypher templates.
 - The default test run never touches the network or needs a real PBF (`addopts = -m "not e2e"`); `test_budapest_output`
   only runs when `out/budapest/stats.json` exists.
-- `tests/test_e2e.py` (marker `e2e`) is the full real run: it downloads `data/raw/budapest.osm.pbf` if missing, overwrites `out/budapest-rings/`,
+- `tests/test_e2e.py` (marker `e2e`) is the full real run: it downloads `data/raw/budapest.osm.pbf` if missing, overwrites `out/budapest/`,
   and starts Neo4j as the separate compose project `citygraph-e2e` on ports 17474/17687. Run it after changes to the
   pipeline, the exports or the cypher templates.
 - A real build must end with `all checks ok` (exit code 1 = a check failed). `budapest` (whole city) takes ~45 s.

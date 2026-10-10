@@ -7,7 +7,7 @@ download:                               # citygraph fetch (build fetches a missi
   - url: https://download.bbbike.org/osm/bbbike/Budapest/Budapest.osm.pbf
   - url: https://download.geofabrik.de/europe/hungary-latest.osm.pbf
     md5: https://download.geofabrik.de/europe/hungary-latest.osm.pbf.md5
-    clip: [18.757, 47.325, 19.414, 47.655]  # = the BBBike extract (shared by all budapest* configs)
+    clip: [18.757, 47.325, 19.414, 47.655]  # = the BBBike extract
 network_type: drive
 osmnx_compat: true                      # OSMnx 2.1.1 filter/oneway rules + writes osmnx.graphml
 include_names: [Széchenyi lánchíd]      # car-free since 2023 (psv/taxi/bike only): in the Neo4j graph with

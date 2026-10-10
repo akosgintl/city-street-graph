@@ -1,32 +1,48 @@
-# Whole Barcelona as Superblocker builds it (OSMnx graph_from_polygon on the admin polygon, drive, truncate_by_edge).
-# Zones: the 10 districtes, ordered from Plaça de Sant Jaume (Ciutat Vella first, then l'Eixample).
+# Metropolitan Barcelona: the Àrea Metropolitana de Barcelona (AMB, 36 municipalities, 638 km²), built the way Superblocker
+# builds a city (OSMnx graph_from_polygon on the boundary polygon, drive, truncate_by_edge).
+# Zones: Barcelona's 10 districtes, then the other 35 municipalities, each group ordered from Plaça de Sant Jaume.
 name: Barcelona
-pbf: data/raw/barcelona.osm.pbf
-bbox: [2.02, 41.30, 2.26, 41.49]        # load (+ clip) window: municipality + 500 m + margin (W S E N)
-download:
+pbf: data/raw/barcelona.osm.pbf         # BBBike "Barcelona" extract
+bbox: [1.83, 41.25, 2.32, 41.55]        # load window; must contain the area + 500 m
+download:                               # citygraph fetch (build fetches a missing PBF): tried in order
   - url: https://download.bbbike.org/osm/bbbike/Barcelona/Barcelona.osm.pbf
   - url: https://download.geofabrik.de/europe/spain/cataluna-latest.osm.pbf
     md5: https://download.geofabrik.de/europe/spain/cataluna-latest.osm.pbf.md5
-    clip: true                          # cut to bbox
+    clip: [1.802, 41.23, 2.479, 41.618]   # = the BBBike extract
 network_type: drive
-osmnx_compat: true
-area: {osm_admin: {name: Barcelona, admin_level: 8}}  # municipality (province = 6, comarca Barcelonès = 7)
-clip: any
+osmnx_compat: true                      # OSMnx 2.1.1 filter/oneway rules + writes osmnx.graphml
+# The AMB is not boundary=administrative in OSM (comarca Barcelonès, level 7, is only 5 municipalities):
+# relation 18205773, boundary=local_authority.
+area: {osm_admin: {name: Àrea Metropolitana de Barcelona, boundary: local_authority}}
+clip: any                               # truncate_by_edge=True: keep edges with one end inside
+
+river:
+  name: Riu Besòs                       # flags river_crossing bridge segments (Sant Andreu / Sant Adrià / Santa Coloma).
+                                        # One river per config: the Llobregat ("el Llobregat") bridges are only is_bridge.
 
 zones:
   - type: osm_admin_auto
-    admin_level: 9                      # districtes (barris = 10)
-    order_from: [2.1771, 41.3826]       # Plaça de Sant Jaume (Pl. de Catalunya is on the Ciutat Vella/Eixample border)
-    expect_count: 10                    # build fails if a different number is found
+    admin_level: 9                      # districtes; l'Hospitalet, Badalona ... have level-9 districts too, hence `within`
+    within: {name: Barcelona, admin_level: 8}
+    order_from: [2.1771, 41.3826]       # Plaça de Sant Jaume
+    expect_count: 10
+  - type: osm_admin_auto
+    admin_level: 8                      # the other AMB municipalities
+    exclude: [Barcelona]
+    order_from: [2.1771, 41.3826]
+    expect_count: 35
 
 checks:
   fail_on_error: true
+  # the named Besòs bridges, north -> south. The other crossings carry street names in OSM (Autopista del Maresme,
+  # Avinguda de les Corts Catalanes, Carrer de la Torrassa, Avinguda d'Eduard Maristany): flagged, not checked by name.
+  bridges: [Pont de Montcada, Pont de Can Zam, Pont de Santa Coloma, Pont de Can Peixauet, Pont del Molinet, Pont dels Passadors]
 
 render:
-  zoom_bbox: [2.150, 41.375, 2.185, 41.400]   # Ciutat Vella + lower Eixample
+  zoom_bbox: [2.140, 41.370, 2.200, 41.410]   # Ciutat Vella + central Eixample
 
 neo4j_params:
   from_streets: [Passeig de Gràcia, Gran Via de les Corts Catalanes]
-  to_street: Via Laietana
+  to_street: Rambla de Sant Sebastià            # Santa Coloma de Gramenet, across the Besòs
   ring: null
   here: {latitude: 41.3870, longitude: 2.1700}  # Plaça de Catalunya

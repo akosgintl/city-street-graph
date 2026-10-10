@@ -61,25 +61,37 @@ def spread(ys: list[float], gap: float, lo: float, hi: float) -> list[float]:
 
 
 def label_bridges(ax, bridges: dict, crop: tuple) -> None:
-    """Names in a column right of the map, in map order north -> south, each with a leader line to its bridge."""
+    """Names in a column right of the map, in map order north -> south, each with a leader line to its bridge.
+    A river that runs east-west (landscape crop): slanted names above the map, in map order east -> west."""
     x0, y0, x1, y1 = crop
     note = {"in_graph": "", "restricted": "  (in the graph, restricted=true)", "road": "  (road, not in the graph)", "rail": "  (railway, not in the graph)"}
     items = []
     for (bname, kind), lns in bridges.items():
         c = unary_union([wkt.loads("LINESTRING (" + ", ".join(f"{x} {y}" for x, y in ln) + ")") for ln in lns]).centroid
         items.append((-c.y, c.x, bname, kind))
-    items.sort()
     fs = 8
-    gap = 1.9 * fs / 72 / ax.figure.get_figheight() * (y1 - y0) / ax.get_position().height
-    tx = x1 + 0.03 * (x1 - x0)
-    for (ny, x, bname, kind), ty in zip(items, spread([-i[0] for i in items], gap, y0 + gap, y1 - gap)):
-        col = OTHER_BRIDGE if kind in ("road", "rail") else BRIDGE
-        ax.add_line(Line2D([x, x1, tx], [-ny, ty, ty], color=col, lw=0.5, alpha=0.7, zorder=6, clip_on=False))
-        ax.text(tx + 0.01 * (x1 - x0), ty, bname + note[kind], color=col, fontsize=fs, va="center", ha="left",
-                clip_on=False)
+    wide = x1 - x0 > y1 - y0
+    if wide:
+        items.sort(key=lambda i: (-i[1], i[0], i[2:]))
+        gap = 1.5 * fs / 72 / ax.figure.get_figwidth() * (x1 - x0) / ax.get_position().width
+        ty = y1 + 0.03 * (y1 - y0)
+        for (ny, x, bname, kind), tx in zip(items, spread([i[1] for i in items], gap, x0 + gap, x1 - gap)):
+            col = OTHER_BRIDGE if kind in ("road", "rail") else BRIDGE
+            ax.add_line(Line2D([x, tx, tx], [-ny, y1, ty], color=col, lw=0.7, alpha=0.9, zorder=6, clip_on=False))
+            ax.text(tx, ty + 0.01 * (y1 - y0), bname + note[kind], color=col, fontsize=fs, va="center", ha="left",
+                    rotation=60, rotation_mode="anchor", clip_on=False)
+    else:
+        items.sort()
+        gap = 1.9 * fs / 72 / ax.figure.get_figheight() * (y1 - y0) / ax.get_position().height
+        tx = x1 + 0.03 * (x1 - x0)
+        for (ny, x, bname, kind), ty in zip(items, spread([-i[0] for i in items], gap, y0 + gap, y1 - gap)):
+            col = OTHER_BRIDGE if kind in ("road", "rail") else BRIDGE
+            ax.add_line(Line2D([x, x1, tx], [-ny, ty, ty], color=col, lw=0.5, alpha=0.7, zorder=6, clip_on=False))
+            ax.text(tx + 0.01 * (x1 - x0), ty, bname + note[kind], color=col, fontsize=fs, va="center", ha="left",
+                    clip_on=False)
     ax.legend(handles=[Line2D([], [], color=BRIDGE, lw=1.6, label="river bridge in the graph"),
                        Line2D([], [], color=OTHER_BRIDGE, lw=1.6, ls=(0, (3, 1.5)), label="river bridge not in the graph")],
-              fontsize=7, framealpha=0.8, loc="upper left")
+              fontsize=7, framealpha=0.8, loc="lower right" if wide else "upper left")
 
 
 def render(out: Path, name: str, zoom_bbox: list[float] | None = None) -> list[Path]:
